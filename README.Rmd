@@ -1,509 +1,759 @@
 ---
-output: github_document
+title: "UNL LTAR-PRHPA Eddy Covariance Flux Data Workflow"
+author: "Xiangmin (Sam) Sun"
+date: "`r Sys.Date()`"
+output: 
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 3
+    number_sections: true
 ---
 
-<!-- README.md is generated from README.Rmd. Please edit that file -->
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+library(tidyverse)
+library(openeddy)
+library(REddyProc)
+library(fs)
 
-```{r, include = FALSE}
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = NA,
-  fig.path = "README-",
-  out.width = "100%"
-)
+library(sf) # for ROI
+library(leaflet)
+
 ```
-
-# Eddy covariance workflow
-
+<!--
+# Eddy Covariance Flux Data processing Protocol at LTAR PRHPA
+-->
 ## Overview
 
-The eddy covariance (EC) workflow demonstrates how to use
-[openeddy](https://github.com/lsigut/openeddy) package together with
-[REddyProc](https://github.com/bgctw/REddyProc) package to facilitate
-automated and reproducible EC data post-processing, supporting Tau, H,
-LE and CO<sub>2</sub> (NEE) fluxes. The presented EC workflow is a set
-of post-processing steps that were applied for a particular cropland
-site
-[CZ-KrP](http://www.europe-fluxdata.eu/home/site-details?id=CZ-KrP). The
-main purpose of EC workflow is to show how to utilize the `openeddy`
-software infrastructure. It is not meant to represent the optimal best
-post-processing workflow, especially concerning the quality control. The
-`openeddy` provides enough flexibility for users to adapt
-post-processing to specifics of their site and will hopefully facilitate
-discussion and exchange of best practices concerning various types of
-ecosystems and EC setups.
+This eddy covariance (EC) flux data workflow demonstrates a streamlined data processing protocol for net ecosystem exchange of CO~2~ (NEE) and H~2~O (or evapotranspiration) flux from the [LTAR platte river/high plains aquifer (PRHPA)](https://ltar.ars.usda.gov/sites/prhpa/) site. The workflow is developed mainly based on two R packages, including [openeddy](https://github.com/lsigut/openeddy) and [REddyProc](https://github.com/EarthyScience/REddyProc). This workflow/protocol consists of a set of post-processing functions/steps for flux data quality control and quality assurance (QAQC).
 
-Comments in the workflow files explain how individual steps lead to the
-desired output. If you look for the settings and details about the
-`openeddy` functions, see their respective help files
-(`?function_name`). Notice that there is also a set of interactive
-[openeddy tutorials](https://github.com/lsigut/openeddy_tutorials) that
-provide more context.
+some abbreviations commonly used in this document and across flux community:
 
-## Requirements
+* EC: Eddy Covariance
+* QC: Quality Control
+* QA: Quality Assurance
+* SA: Sonic Anemometer
+* (IR)GA: (Infra-red) Gas Analyzer
+* Tau: Momentum Flux ($Kg~m^{-1}~s^{-2}$)
+* H: Sensible heat flux ($W~m^{-2}$)
+* LE: Latent heat flux ($W~m^{-2}$)
+* NEE: Net ecosystem exchange ($\mu mol~m^{-2}~s{-1}$)
+* u: Longitudinal wind speed component ($m~s^{-1}$)
+* v: Across wind speed component  ($m~s^{-1}$)
+* w: Vertical wind speed component ($m~s^{-1}$)
+* ts: Sonic temperature ($^\circ C$)
+* h2o: water vapor ($H_2O$) concentration ($mmol~mol^{-1}$)
+* co2: $CO_2$ concentration ($\mu mol~mol^{-1}$) 
 
-The EC workflow is currently aligned with `EddyPro` software
-[output](https://www.licor.com/env/support/EddyPro/topics/output-files-full-output.html).
-It is expected that meteorological data passed its own separate workflow
-(not in the scope of `openeddy`), i.e. they are already converted to
-physical units, underwent quality control and are gap-filled.
+## Prerequisites
 
-List of expected meteorological variables (see [Naming strategy with the
-EC workflow]):
+This post-processing workflow requires the following inputs: 
 
-| Recommended setup                        | Minimum setup |
-|:-----------------------------------------|:--------------|
-| GR, PAR, Rn, Tair, Tsoil, VPD (or RH), P | GR, Tair      |
+* [EddyPro](https://www.licor.com/products/eddy-covariance/eddypro) full [output files](https://www.licor.com/support/EddyPro/topics/output-files-full-output.html). Annual complete file for each individual year would be preferred and recommended, mostly due to the constraints by gap filling and flux partitioning functions in `REddyProc` package. Namely, data series with multiple years or fragments shorter than half a year are not well supported.
 
-Gaps in meteorological data are allowed (except for global radiation,
-GR, needed for day/night data separation in `despikeLF()`), but
-`REddyProc` gap filling of meteorological data performs well mostly for
-short gaps. Minimum setup describes bare minimum needed for used
-functions and would require adaptations of the workflow.
+* Meteorological data (or biomet data), went through its independent workflow for unit conversion, QAQC, and gap-filling. 
 
-Processing of multiple or incomplete years is supported but it requires
-edits in EC workflow scripts. Note that for data fragments shorter than
-a half year the processing (mainly `REddyProc` gap filling and flux
-partitioning) might not be reliable. `REddyProc` has defined constraints
-that has to be met, otherwise processing will not proceed and
-informative error message should be produced. Note that `REddyProc` is
-meant to fill the gaps within the period when sampling occurs, instead
-of extrapolating data from a short measurement period to a much larger
-period (e.g. you cannot use few months of measurements to obtain annual
-budgets).
+The recommended meteorological variables include:
 
-**Adapting workflow for a new site** mainly requires to edit the
-`KRP16_0_settings_2025-04-27.R` file according to provided comments.
-Other workflow files should remain unchanged. Settings edits include
-renaming of meteorological variables to workflow standard (`Met_mapping`
-object) and defining region of interest (ROI) `boundary`. In order to
-run `fetch_filter()`, `QC` workflow requires the ROI `boundary` for
-given site-year. ROI is provided by the user in a form of numeric vector
-(see [ROI boundary] section below and
-<https://github.com/lsigut/ROI_boundary>).
+```{r biomet_vars, results='asis', echo = FALSE, warning=FALSE}
+options(knitr.kable.NA = '')
+knitr::opts_knit$set(bookdown.internal.label = TRUE)
+table_data <- data.frame(
+  Label = c("$GR$", "$T_{air}$", "PAR", "$R_n$", "$T_{soil}$", "$VPD$", "$RH$", "$P$"),
+  Name = c(
+    "global radiation",
+    "air temperature at EC height",
+    "photosynthetically active radiation",
+    "net radiation",
+    "soil temperature at soil surface",
+    "vapor pressure deficit at EC height",
+    "relative humidity at EC height",
+    "precipitation"
+  ),
+  Unit = c(
+    "$W~m^{-2}$",
+    "$^\\circ$C",
+    "$\\mu mol~m^{-2}~s^{-1}$",
+    "$W~m^{-2}$",
+    "$^\\circ$C",
+    "$hPa$",
+    "$\\%$",
+    "$mm$"
+  ),
+  stringsAsFactors = FALSE
+)
 
-Support for other EC processing
-[software](https://ameriflux.lbl.gov/resources/resource-list/tools-and-software-for-flux-scientists/raw-data-processing-and-qa-qc/)
-(e.g. TK3, EdiRe, EddyUH, EddySoft) is not explicitly provided but
-alternative workflow should be achievable already with the existing
-`openeddy` capabilities. The easiest approach could be to `remap_vars()`
-using the pairing of column names of `EddyPro` full output and the EC
-processing software used. `EddyPro`-specific tests/filters mainly
-present in `extract_QC()` would need to be substituted for their
-alternatives. Similarly, support for CH<sub>4</sub>, N<sub>2</sub>O or
-other trace gases is not planned, however they should be feasible to
-some degree (note that look-up tables might not be optimal for gap
-filling of such fluxes).
-
-## Usage
-
-To run EC workflow for the example site-year `KRP16`:
-
-Download `KRP16 - before processing.zip` from
-[Zenodo](https://doi.org/10.5281/zenodo.1442530) and unzip. Run workflow
-files in specified order according to instructions there:
-
-1.  `WF_1_data_preparation`: formatting and merging inputs.
-2.  `WF_2_QC`: eddy covariance quality control and storage correction.
-3.  `WF_3_GF_&_FP`: uStar filtering, gap filling and flux partitioning.
-4.  `WF_4_Summary`: aggregation and plotting of results.
-
-For a new site-year, `settings` workflow file should be edited first.
-File prefix `KRP16` can be changed to identify related site-year. Date
-suffix identifies workflow version and should not be edited. Workflow
-file `utilites` is required by the workflow scripts and is not meant for
-user interaction.
-
-Commands in `WF_1` and `WF_2` should be run one by one, to get better
-feedback about problems with data inputs or data quality. Especially
-`WF_2` includes interactive function (`check_manually()`) that requires
-direct user input. `WF_3` should require minimal user supervision.
-`WF_4` can be `source()`d.
-
-Note that using `source()` for the QC workflow will not produce desired
-outcome if variable `interactive = TRUE` because `check_manually()` will
-expect interactive session (manual marking of outliers). Once the manual
-QC is finalized and saved, changing to `interactive = FALSE` in
-`settings` allows to reproduce the results by sourcing.
-
-You can compare your results with those of `KRP16 - processed.zip` at
-[Zenodo](https://doi.org/10.5281/zenodo.1442530). Notice that in order
-to obtain identical results, you would need to copy the subjective
-manual screening done by site PI located at
-`.\level_2\quality_checking\KRP16_manual_QC.csv`.
-
-## Description
-
-The proposed workflow allows to process eddy covariance data with single
-processing chain consisting of four stages:
-
-1.  **Data preparation:** prepare data for QC. Meteo data and EddyPro
-    full output files are validated, accordingly formatted, merged and
-    saved with documentation. All numeric values are rounded to a
-    reasonable precision. Meteo variable names are remapped according to
-    the requirements of `openeddy` and `REddyProc` packages.
-    `WF_1_data_preparation` produces files at `.\level_1\input_for_qc\`
-    folder.
-
-2.  **Quality control:** load the `EddyPro` output and gap-filled
-    meteorological data and apply automated tests and filters
-    implemented in `openeddy` to quality check fluxes of momentum (Tau),
-    sensible (H) and latent heat (LE) and net ecosystem exchange (NEE).
-    Perform storage correction of fluxes using discrete (one point)
-    storage estimate available in the `EddyPro` full output. While this
-    is sufficient for sites with short canopy (e.g. the example cropland
-    site `CZ-KrP`), one point approximation is less suitable with
-    increasing EC measurement height. Computation of storage flux from
-    profile measurements is not in the scope of `openeddy`. Export
-    documentation of applied QC and produce the outputs needed in next
-    steps. `WF_2_QC` produces files at `.\level_2\quality_checking\` and
-    `.\level_2\input_for_gf\` folders.
-
-3.  **Gap filling and flux partitioning:** use `REddyProc` to estimate
-    uStar threshold, apply uStar filtering, gap fill (H, LE, NEE) and
-    partition (NEE) fluxes. Use `openeddy` to visualize H, LE and NEE
-    fluxes. The setup allows to change and document some processing
-    options in an organized way. `WF_3_GF_&_FP` produces files at
-    `.\level_3\gap_filling\`.
-
-4.  **Summary:** visualize processed data, convert units and aggregate
-    results to daily, weekly, monthly and yearly timescales. A limited
-    amount of computed parameters is also produced, including different
-    uncertainty estimates. `WF_4_Summary` produces files at
-    `.\level_3\summary\`.
-
-The EC workflow assumes certain folder structure for each site-year that
-makes data handling more effective. The folder structure can be created
-using `make_paths()` with following content:
-
-```{r echo=FALSE, message=FALSE}
-library(openeddy)
-library(fs)
-zz <- make_paths("site_year", create_dirs = TRUE)
-fs::dir_tree("site_year")
-unlink("site_year", recursive = TRUE)
+kable(
+  table_data,
+  escape = FALSE,
+  #caption = "Table 1, meteorological variables",
+  booktabs = TRUE) %>%
+  kable_styling(full_width = FALSE, font_size = 12) |> 
+  footnote(
+    general = "Note: $GR$ and $T_{air}$ are required for minimum setup. Gaps in $GR$ are not allowed due to its use for day/night separation with despikeLF().",
+   general_title = "",
+    escape = FALSE
+  )
 ```
 
--   Level 1: half-hourly data processed by `EddyPro` and gap-filled
-    meteorological data.
--   Level 2: results and documentation of QC, storage corrected fluxes
-    for GF & FP.
--   Level 3: results of GF & FP and the data set summaries.
+Table \@ref(tab:biomet_vars)
 
-The complete processing chain in the context of above folder structure
-can be summarized as:
+Packages and software needed to be installed:
 
-![](Processing_chain.jpg)
+* Software and platform: R and R studio
+* R packages, including `tidyverse`, `openeddy`, and `REddyProc`
+* `fs` package: provides a cross-platform, uniform interface for file system operations in R.
 
-## QC principles
+## Custimizing the workflow
+To revise and customize the code for your sites, you mainly need to edit the `ltar_unl_settings_2026-02-18.R` file accordingly.  
 
-Quality assurance (QA) is always preferred to QC. If faulty instrument
-producing spurious measurements can be exchanged, repaired or
-calibrated, it is always preferred to simply flagging and removing
-affected period. This requires frequent check of instruments, timely
-maintenance, well educated technical support and established service
-routine or calendar. Therefore QC cannot substitute neglected QA and the
-concept "garbage in, garbage out" applies also for EC workflow. QA and
-QC can be understood also as a learning process described in the
-following diagram.
+The setting edits include: (1) renaming meteorological variables to workflow standard (`Met_mapping` object) and (2) defining region of interest (ROI) `boundary`.
 
-<p align="center">
+## The workflow
+![The processing chain.](./flowchart.png)
 
-<img src="qa_and_qc.jpg" width="300"/>
 
-</p>
 
-In `openeddy`, `EddyPro` software serves as a way of input data
-standardization. Data frames have defined column names and units with
-conserved data formatting. This property is used to easily read the
-expected columns, thus the typical input data structure of most
-functions is a data frame. Quality control consists of two phases:
+# Site setup
 
-1.  obtaining QC filters (filters must be defined and columns containing
-    QC flags saved to a data frame)
+Consisting of LTAR-PRHPA Flux site:
 
-2.  applying QC filters (either directly by removing flux values or by
-    combining all applied filters and assuring that data will be
-    interpreted in respect to the combined QC flags).
+* sonic anemometer: CSAT3A, Campbell
+* open-path CO2/H2O IRGA:EC150 from Campbell before March 2020, and LI-7500DS afterwards
+* Data synchronization and data logger: EC 100 and CR5000, Campbell
+* Soil heat flux plate, HFP01, 6 cm in depth
+* soil water sensor: CS616, 6 cm and 25 cm in depth
 
-This approach allows to evaluate a complete set of QC filters and select
-for application only those with the best flagging efficiency (trade-off
-between the count of removed spurious records and the amount of
-available records after the QC filter application). Note that such
-selected QC scheme can depend also on the type of follow up analysis
-(data application). E.g. if the data will be used to compute annual
-budgets, outlying values would bias the look-up table statistics when
-filling gaps and thus should be removed. On the other hand, if the focus
-of following analysis are exceptional fluxes, outlying values should be
-kept and analyzed.
+# Quality Assurance and Quality Control
+Quality assurance (QA) and quality control (QC) are distinct for quality management of EC flux data. As proactive measure and process-oriented, QA is to prevent data loss or bad data by establishing routine maintenance procedures. For example, we need to routinely (remote and in situ) check the site, inspect and calibrate instruments (especially gas analyzers), and repair the faulty ones in time. Thoughtful and well maintenance of the site are critical, such as cleaning the dust, preventive procedure for damages by weather and animals, and timely replacing batteries and desiccant bags. An example for best practices checklist is available from [Ameriflux.]( https://ameriflux.lbl.gov/wp-content/uploads/2023/08/Best_practices_checklist-2023-08-11.pdf) On the other hand, QC is reactive and product (flux data)-oriented, namely focusing on detecting and correcting defects in the flux data through testing and inspection, such as flagging.
 
-<p align="center">
+QC procedure for EC flux data consist of two phrases:
 
-<img src="qc_application.jpg" width="400"/>
+1. obtaining QC flags from EddyPro output. The common flagging scheme is:
 
-</p>
-
-The application of QC filters depends on whether the applied filters are
-independent (most of the QC filters; QC flags are interpreted
-independently on their order as maximum value is taken) or additive
-(*wresid* and *interdep* filters; they serve as flag corrections and
-thus the outcome depends on their position within the QC workflow).
-
-<p align="center">
-
-<img src="combn_QC.jpg" width="400"/>
-
-</p>
-
-### Flagging scheme
-
--   flag 0 – high quality
--   flag 1 – minor issues
--   flag 2 – major issues
-
-Due to the strict testing withing the QC workflow, both flag 0 and flag
-1 data are suggested to be used for fundamental research. Only flag 2
-(low data quality) is meant to be discarded. Note that if QC filter A
-and filter B both flag 25% of data with flag 2, the fraction of excluded
-data is typically lower than 50%. This is because the averaging periods
-with major issues are often flagged by multiple filters.
+    + flag 0 – high quality
+    + flag 1 – minor issues
+    + flag 2 – major issues
+2. application of QC filtering (either removing or propagating according to the QC flags). Selection of best efficient flags are site-dependent and task-specific, considering trade-off between deleting spurious data and minimizing gaps and keeping high data availability. The common practice is to keep flag 0 and flag 1 data, and to discard flag 2 (low data quality) ones. 
 
 ## ROI boundary
+The boundary of the study site delineates spatial extent of the studied ecosystem, or the region of interest (ROI). The edge of the studied ecosystem is critical for footprint analysis, namely to inspect whether the ROI is within or beyond the flux fetch (footprint) along the wind direction.
 
-The outline delimiting the spatial extent of the studied ecosystem
-(region of interest; ROI) is specified by its ROI boundary that
-describes the distance from EC tower to the edge of the studied
-ecosystem for given wind direction. In order to work with `openeddy`,
-ROI boundary has to be provided as a numeric vector with following
-properties:
+```{r results='asis', echo = FALSE, warning=FALSE}
+### Load packages and data =====================================================
 
--   The number of circular sectors is the same as the number of provided
-    distances (length of the vector).
--   The angular resolution of the ROI boundary is given by
-    `360° / number of angular sectors`.
--   The ROI boundary distances are assigned to the centers of their
-    respective circular sectors with first sector centered on 0°.
+# Example for LTAR-PRHPA pasture site
+tower <- c(-96.461542, 41.144725) # c(longtitude, latitude)
 
-### ROI boundary example
 
-<p align="center">
+# Fetch boundary defined by the user as a vector of distances [m] from tower
+# - test e.g.: boundary <- c(150, 300)
+boundary <- 
+  round(c(168.780731106454,
+    169.183194638855,
+    170.882336040685,
+    173.944967030343,
+    178.495573098197,
+    184.729065084478,
+    192.932314955919,
+    203.519207356786,
+    217.087918319131,
+    234.516916401058,
+    220.451788128581,
+    205.839787735011,
+    194.429277578204,
+    185.555786643288,
+    178.761129490315,
+    173.727376795414,
+    170.236665944739,
+    168.146462911406,
+    167.37466236847,
+    167.891480045134,
+    169.71659855896,
+    172.921046352203,
+    177.634150686771,
+    184.056869352615,
+    192.484178088854,
+    203.341474578383,
+    214.555577013468,
+    196.159384775566,
+    181.952887607214,
+    170.88304661899,
+    162.248908651932,
+    155.571616180284,
+    150.51938165785,
+    146.862503046101,
+    144.445770895976,
+    143.171547589434,
+    142.98986219874,
+    143.893568318863,
+    145.917665980502,
+    148.953103981661,
+    153.293220027326,
+    159.135823852179,
+    166.757566095119,
+    176.557016805629,
+    189.366325090942,
+    205.964016004746,
+    227.664567120047,
+    225.55200919967,
+    213.119890064622,
+    203.453470857287,
+    196.055752325788,
+    190.581875747358,
+    186.795711409634,
+    184.543137619479,
+    183.735972035383,
+    184.349522672954,
+    186.440136890606,
+    190.051670714264,
+    195.330560062419,
+    202.503101338246,
+    211.900817221016,
+    224.001686995719,
+    239.497692905488,
+    240.717576656129,
+    221.939125056055,
+    207.350046651755,
+    195.963962894719,
+    187.113752982361,
+    180.339355254585,
+    175.321497250216,
+    171.841364205673,
+    169.659295400534), 2)
 
-![](ROI%20boundary%20example.jpg)
+# The Universal Transverse Mercator (UTM) zone of the location
+UTM_zone <- 14  #https://hub.arcgis.com/datasets/esri::world-utm-grid/
 
-</p>
+# Choose the angle that resolves the edge of each circular sector
+# - the lower the plot_res, the higher the smoothness
+# - plot_res takes care only of the smoothness of the curvature on the edge of a 
+#   single angular sector segment. Thus it only matters if angular resolution of 
+#   the boundary (orig_res) is low (e.g. if boundary = c(150, 300), orig_res = 
+#   180)
+# - plot_res = 1 should be sufficient for most cases
+plot_res <- 1 
 
-In this simplified case ROI boundary would be specified as:
+### Create spatial polygon based on supplied fetch boundary ====================
 
-``` r
-c(150, 200, 250, 300)
+# Angular resolution of the original fetch distances
+orig_res <- 360 / length(boundary)
+
+# Warn user if only one point per circular sector should be produced 
+if (plot_res > orig_res) 
+  warning('plot_res larger than orig_res - reduce plot_res')
+
+# Reconstruct the azimuths (assumes first one is North)
+azimuths <- seq(0, 360 - orig_res, by = orig_res)
+
+# Half of original resolution
+hr <- orig_res / 2
+
+# Compute plotting angles for each azimuth and combine them to vector
+ang_l <- lapply(azimuths, 
+                function(x) seq(-hr + x, hr + x, by = plot_res))
+ang <- do.call(c, ang_l) 
+
+# Specify corresponding fetch distances to each angle
+distance <- rep(boundary, each = length(ang_l[[1]]))
+
+# Convert tower location to spatial type with coordinate reference system (CRS)
+tower_sfc <- st_sfc(st_point(tower), crs = "+proj=longlat +datum=WGS84") 
+
+# Transform the projection to UTM
+tower_UTM <- st_transform(tower_sfc, 
+                          paste0("+proj=utm +zone=", UTM_zone, " ellps=WGS84"))
+  
+# Function to get XY coordinates based on distance from reference point
+get_point <- function(coord, distance, angle) {
+  X <- distance*cos(pi/2-angle/180*pi)+coord[1]
+  Y <- distance*sin(pi/2-angle/180*pi)+coord[2]
+  c(X, Y)
+}
+
+# Find location of each edge point and save it to list
+# - get_point() is not vectorized
+polygon_l <- vector("list", length(ang))
+for (i in seq_along(ang)) {
+  polygon_l[[i]] <- get_point(st_coordinates(tower_UTM), distance[i], ang[i])
+}
+
+# Create a matrix from the edge points
+polygon_m <- do.call(rbind, polygon_l)
+
+# Create polygon spatial type from edge points and assign CRS
+# - to close the polygon, first coordinate must be repeated
+polygon <- st_sfc(st_polygon(list(rbind(polygon_m, polygon_m[1, ]))),
+                  crs = paste0("+proj=utm +zone=", UTM_zone, " ellps=WGS84"))
+
+# Transform the projection to WGS84
+polygon_coords <- 
+  st_transform(polygon, crs = "+proj=longlat +datum=WGS84") |> 
+  # Convert polygon to a format leaflet understands
+  st_coordinates()
+
+####
+leaflet() |>
+  addProviderTiles(providers$Esri.WorldImagery) |>  # satellite tiles, free
+  addPolygons(
+    lng = polygon_coords[, 1],
+    lat = polygon_coords[, 2],
+    color = "red",
+    fillOpacity = 0.3,
+    weight = 2
+  ) |>
+  addMarkers(
+    lng = tower[1],
+    lat = tower[2],
+    popup = "Tower"
+  )
+# EOF
 ```
 
-**Interpretation:**
 
--   There would be 4 circular sectors with 90° angular resolution.
--   ROI boundary is specified for the whole first sector (315°, 45°] at
-    the distance 150 m from tower (center of the sector is 0°).
--   Boundary of the second sector (45°, 135°] is at the distance 200 m.
--   Third sector (135°, 225°] is at the distance 250 m.
--   Fourth sector (225°, 315°] is at the distance 300 m.
-
-Realistic representation of ROI boundary can look e.g. like this:
-
-![](CZ-Krp_fetch.png)
-
-## Change of EC system or EddyPro settings
-
-Functions `extract_QC(..., filters = c("missfrac", "wresid"))` and
-`interdep()` require information about EC or EddyPro setup. For
-*missfrac* filter it is the number of records in averaging period (e.g.
-36 000 for half-hourly period with 20 Hz measurements), for *wresid* it
-is the coordinate rotation type (double or planar fit rotation), for
-*interdep* it is the infrared gas analyzer type (either open path or
-(en)closed path). These specifications can be provided as single values
-if the properties did not change throughout the data set. If the
-properties changed (typically when merging multiple EddyPro files from
-extended period), user can provide additional columns ("max_records",
-"used_rotation", "used_IRGA") by `label_periods()` to specify these
-properties for each averaging period (see relevant function help files:
-`?extract_QC`, `?interdep`, `?label_periods`). For the columns to be
-recognized, respective changes need to be made also in QC workflow (see
-the description there).
 
 ## Naming strategy with the EC workflow
 
-In order to take advantage of `openeddy` default arguments, certain
-naming strategy is recommended.
+### [EddyPro full output variable names (simplified)](https://www.licor.com/support/EddyPro/topics/output-files-full-output.html) 
+```{r, results='asis', echo=FALSE, warning=FALSE}
+library(knitr)
+library(kableExtra)
 
-`EddyPro` full output [variable
-names](https://www.licor.com/env/support/EddyPro/topics/output-files-full-output.html)
-are used with a few modifications if symbols were included in the
-variable name (e.g. Monin-Obukhov stability parameter `(z-d)/L` is
-corrected to `zeta`).
+table_data <- data.frame(
+  Label = c(
+    "filename","date","time","file_records","used_records",
+    "Tau","qc_Tau","rand_err_Tau","H","qc_H","rand_err_H",
+    "LE","qc_LE","rand_err_LE","gas_flux","qc_gas_flux",
+    "rand_err_gas_flux","H_strg","LE_strg","gas_strg",
+    "gas_v-adv","gas_molar_density","gas_mole_fraction",
+    "gas_mixing_ratio",#"gas_time_lag","gas_def_timelag",
+    # "sonic_temperature",
+    "air_temperature","air_pressure",
+    "air_density","air_heat_capacity","air_molar_volume",
+    "ET",#"water_vapor_density","e","es","specific_humidity",
+    "RH","VPD","Tdew",#"u_unrot","v_unrot","w_unrot",
+    "u_rot","v_rot","w_rot","wind_speed",#"max_wind_speed",
+    "wind_dir",#"yaw","pitch",
+    "u_star","TKE","L","*zeta*",
+    "bowen_ratio","T_star","footprint_model","x_offset",
+    "x_peak",#"x_10%","x_30%","x_50%",
+    "x_70%","x_90%",
+    #"un_Tau",
+    "Tau_scf",#"un_H",
+    "H_scf",#"un_LE",
+    "LE_scf",
+    #"un_gas_flux","gas_scf",
+    #"spikes",#"amp_res","drop_out",
+    #"abs_lim","skw_kur","discontinuities","time_lag",
+    #"attack_angle","non_steady_wind",
+    "var_spikes",
+    "AGC",
+    "RSSI","var_var","w_var_cov","extravar_mean"
+  ),
+  Units = c(
+    " ","yyyy-mm-dd","HH:MM"," "," ",
+    "$kg~m^{-1}~s^{-2}$"," ","$kg~m^{-1}~s^{-2}$","$W~m^{-2}$"," ","$W~m^{-2}$",
+    "$W~m^{-2}$"," ","$W~m^{-2}$","$µmol~m^{-2}~s^{-1}$ (†)"," ",
+    "$µmol~m^{-2}~s^{-1}$ (†)","$W~m^{-2}$","$W~m^{-2}$","$µmol~m^{-2}~s^{-1}$ (†)",
+    "$µmol~m^{-2}~s^{-1}$ (†)","$mmol~m^{-3}$","$µmol~m^{-2}~s^{-1}$ (†)",
+    "$µmol~m^{-2}~s^{-1}$ (†)",#"s","T/F", "K",
+    "K","Pa",
+    "$kg~m^{-3}$","$J~K^{-1}~kg^{-1}$","$m^3~mol^{-1}$",
+    "$mm~hour^{-1}$",#"kg m-3","Pa","Pa","kg kg-1",
+    "%","Pa","K",#"m s-1","m s-1","m s-1",
+    "$m~s^{-1}$","$m~s^{-1}$","$m~s^{-1}$","$m~s^{-1}$",#"m s-1",
+    "°",#"°","°",
+    "$m~s^{-1}$","$m^2~s^{-2}$","$m$"," ",
+    " ","K"," ","$m$",
+    "$m$",#"m",#"m","m",
+    "$m$", "$m$",
+    #"kg m-1 s-2"," ","W m-2"," ","W m-2"," ",
+    #"µmol m-2 s-1 (†)"," "," "," "," ",
+    " "," "," ",#" ",
+    #"0/1/9","0/1/9",
+    " ",
+    " ",
+    " ","(‡)","(‡)","(‡)"
+  ),
+  Description = c(
+    "Name of the raw file (or the first of a set) ",
+    "Date of the end of the averaging period",
+    "Time of the end of the averaging period",
+    "Number of valid records in raw file(s)",
+    "Number of valid records",
+    "Corrected momentum flux",
+    "Quality flag for momentum flux",
+    "Random error for momentum flux, if selected",
+    "Corrected sensible heat flux",
+    "Quality flag for sensible heat",
+    "Random error for sensible heat, if selected",
+    "Corrected latent heat flux",
+    "Quality flag latent heat",
+    "Random error for latent heat, if selected",
+    "Corrected gas flux",
+    "Quality flag for gas flux",
+    "Random error for gas flux",
+    "Storage sensible heat flux",
+    "Storage latent heat flux",
+    "Storage gas flux",
+    "Vertical advection flux",
+    "Gas molar density",
+    "Gas mole fraction",
+    "Gas mixing ratio",
+    #"Time lag used to synchronize gas time series",
+    #"Flag: default (T) or calculated (F) time lag",
+    #"Mean temperature of ambient air from anemometer",
+    "Mean temperature of ambient air",
+    "Air pressure",
+    "Air density",
+    "Specific heat capacity",
+    "Molar volume",
+    "Evapotranspiration",
+    #"Water vapor mass density",
+    #"Vapor partial pressure",
+    #"vapor partial pressure at saturation ",
+    #"Specific humidity",
+    "Relative humidity",
+    "Vapor pressure deficit",
+    "Dew point temperature",
+    #"Unrotated wind u",
+    #"Unrotated wind v",
+    #"Unrotated wind w",
+    "Rotated wind u (mean wind speed)",
+    "Rotated wind v (should be 0)",
+    "Rotated wind w (should be 0)",
+    "Mean wind speed",
+    #"Max instantaneous wind speed",
+    "Wind direction (from)",
+    #"Yaw angle",
+    #"Pitch angle",
+    "Friction velocity",
+    "Turbulent kinetic energy",
+    "Monin-Obukhov length",
+    "Stability parameter, (z-d)/L",
+    "Bowen ratio (H/LE)",
+    "Scaling temperature",
+    "Footprint model",
+    "Footprint offset",
+    "Footprint peak",
+    #"Footprint 10%",
+    #"Footprint 30%",
+    #"Footprint 50%",
+    "Footprint 70%",
+    "Footprint 90%",
+    #"Uncorrected Tau",
+    "Spectral correction factor for $~Tau$",
+    #"Uncorrected H",
+    "Spectral correction factor for $~H$",
+    #"Uncorrected LE",
+    "Spectral correction factor for $~LE$",
+    #"Uncorrected gas flux",
+    #"Gas spectral correction",
+    #"Spike flags",
+    #"Amplitude resolution flags",
+    #"Drop-out flags",
+    #"Absolute limit flags",
+    #"Skewness/kurtosis flags",
+    #"Discontinuity flags",
+   # "Time lag flags",
+    #"Attack angle flag",
+    #"Non-steady wind flag",
+    "Spike numbers detected and eliminated",
+    "AGC value",
+    "RSSI value",
+    "Variance",
+    "Covariance",
+    "Extra variable mean"
+  )
+)
 
-Expected names of meteorological variables are due to historical
-reasons:
+kable(table_data,
+      caption = "Table 2. Shorthand for variables in output files from EddyPro",
+      booktabs = TRUE) %>%
+   kable_styling(full_width = FALSE) %>%
+  row_spec(seq(1, nrow(table_data), 2), background = "#F2F2F2") %>%  # shade every other row
+  footnote(
+    general = c(
+      "\n † Concentrations and fluxes for water vapor are provided as $mmol~mol^{-1}$ and $mmol~m^{-2}~s~^{-1}$, respectively.\n",
+      "‡ Units depend on the nature of the variable."
+    ),
+    threeparttable = FALSE,
+    footnote_as_chunk = TRUE
+  )
+```
 
--   GR: global radiation [W m-2]
--   PAR: photosynthetically active radiation [umol m-2 s-1]
--   Rn: net radiation [W m-2]
--   Tair: air temperature at EC height [degC]
--   Tsoil: soil temperature at soil surface [degC]
--   RH: relative humidity at EC height [%]
--   VPD: vapor pressure deficit at EC height [hPa]
--   P: precipitation [mm]
+### Meteorological variables
+the variables are listed in the Prerequisites in Table \@ref(tab:meteorology_table)
 
-`openeddy` offers full flexibility concerning QC column names. However,
-in order to avoid QC column duplication and to partly document the type
-of QC test/filter and flux that it corresponds to, following naming
-strategy was devised:
+### Naming strategy for column names:
+#### QC prefixes specify which flux is affected:
 
-### QC prefixes
+* qc_Tau_, qc_H, qc_LE, qc_NEE: only applicable for the respective fluxes.
+* qc_SA_: applicable to fluxes replying only on sonic anemometer-SA (Tau & H).
+* qc_GA_: applicable to fluxes relying on gas analyzer-GA (LE & NEE), where only GA issues are considered.
+* qc_SAGA_:applicable to fluxes relying on both SA and GA (LE & NEE), where both SA and GA issues are considered.
+* qc_ALL_:applicable to all fluxes (often not applied to Tau)
 
-They specify which flux is affected by given QC column:
+#### QC suffixes specify which [QC test/filter](https://www.licor.com/support/EddyPro/topics/despiking-raw-statistical-screening.html) was applied to get the QC flags:
 
--   qc_Tau\_, qc_H, qc_LE, qc_NEE: only applicable for the respective
-    fluxes.
--   qc_SA\_: applicable to fluxes relying only on sonic (Tau, H).
--   qc_GA\_: applicable to fluxes relying on GA (LE, NEE); only GA
-    issues considered.
--   qc_SAGA\_: applicable to fluxes relying both on SA and GA (LE, NEE);
-    both SA and GA issues considered.
--   qc_ALL\_: applicable to all fluxes (in practice often not applied to
-    Tau).
+* _SSITC: steady state and integral turbulence characteristics. A typical QC output from EddyPro. Renamed from original qc_Tau, qc_H, qc_LE, and qc_co2_flux via `correct()` in `WF_1_data_preparation`.
+* _spikesHF for **despiking**: detecting and eliminating short-term outranged values.
+* _ampres for **amplitude**: amplitude resolution of the recorded data to capture the flucuation, and to detect the "step ladder appearance" in the time series.
+* _dropout for **drop-outs**: identifying short periods of "flat valley" in the data series, a sign of short-term instrument malfunction. Extreme bins should have less consecutive data points. 
+* _abslim for **absolute limits**: values outside a user-defined plausible range, such as water concentration above 0.  
+* _skewkurt_sf, _skewkurt_hf, and _skewkurt for **skewness and Kurtosis**: detect periods of instrument malfunction. Skewness measures the asymmetry of probability distribution, while kurtosis measures the deviation from normal distribution (peaked or flat).
+* _discont_sf, _discont_hf, and _discont for **discontinuities**: detect discontinuities that lead to semi-permanent changes. 
+* _timelag_sf, _timelag_hf, and _timelag for **time Lags** : time lags determined by covariance maximization are too different from "user-suggested time lags". Namely, the fluxes miatched for exppected time lags and "actual" time lags. 
+* _attangle for **angle of attack**: calculate sample-wise angle of attacks.
+* _nonsteady for **steadiness of horizontal wind**: test whether along-wind and crosswind components undergo a systematic change (increase or decrease) throughout the file. Flags the instationary horizontal wind.
+* _missfrac: missing data in averaging period
+* _scf: spectral correction factor
+* _wresid: mean unrotated w (double rotation) or w residual (planar fit)
+* _runs: runs with repeating values.
+* _lowcov: fluxes too close to 0 (issues during covariance computation)
+* _var: variances
+* _LI7200: CO2 and H2O signal strength 
+* _interdep: flux interdependency
+* _man: manual quality control
+* _spikesLF: outliers in low frequency data
+* _fetch70: check of x_70 against fetch distance for give wind direction
+* _forGF:composite QC column to screen fluxesfor gap-filling 
 
-### QC suffixes
+More details are available via `extract_QC()`.
 
-They specify which QC test/filter was applied to get the QC flags:
+#### Naming strategy for `REddyProc`
+Details are available at the [REddyProcWeb website](https://bgc.iwww.mpg.de/5624884/Data-Formats)
 
--   \_SSITC: steady state test and test of integral turbulence
-    characteristics. This is a typical QC output of `EddyPro`
-    (originally named qc_Tau, qc_H, qc_LE, qc_co2_flux) and renamed by
-    `correct()` during `WF_1_data_preparation` step.
--   \_spikesHF: check of [high frequency data spike
-    percentage](https://www.licor.com/env/support/EddyPro/topics/despiking-raw-statistical-screening.html#Despiking)
-    in averaging period against thresholds.
--   \_ampres: check of [amplitude
-    resolution](https://www.licor.com/env/support/EddyPro/topics/despiking-raw-statistical-screening.html#Amplituderesolution)
-    in the recorded data.
--   \_dropout: check of
-    [drop-outs](https://www.licor.com/env/support/EddyPro/topics/despiking-raw-statistical-screening.html#Dropouts),
-    i.e. situations when the time series stays for "too long" on a value
-    that is far from the mean.
--   \_abslim: check of [absolute
-    limits](https://www.licor.com/env/support/EddyPro/topics/despiking-raw-statistical-screening.html#Absolutelimits)
-    when raw data are out of plausible range.
--   \_skewkurt_sf, \_skewkurt_hf, \_skewkurt: check of [skewness and
-    kurtosis](https://www.licor.com/env/support/EddyPro/topics/despiking-raw-statistical-screening.html#Skewnessandkurtosis)
-    limits.
--   \_discont_sf, \_discont_hf, \_discont: check of
-    [discontinuities](https://www.licor.com/env/support/EddyPro/topics/despiking-raw-statistical-screening.html#Discontinuities)
-    that lead to semi-permanent changes in the time series.
--   \_timelag_sf, \_timelag_hf, \_timelag: check of estimated
-    [timelags](https://www.licor.com/env/support/EddyPro/topics/despiking-raw-statistical-screening.html#Timelags)
-    compared to the expected timelags.
--   \_attangle: check of [angle of
-    attack](https://www.licor.com/env/support/EddyPro/topics/despiking-raw-statistical-screening.html#Angleofattack).
--   \_nonsteady: check of [steadiness of horizontal
-    wind](https://www.licor.com/env/support/EddyPro/topics/despiking-raw-statistical-screening.html#Steadinessofhorizontalwind).
--   \_missfrac: check of missing data in averaging period against
-    thresholds.
--   \_scf: check of spectral correction factor against thresholds.
--   \_wresid: check of mean unrotated *w* (double rotation) or *w*
-    residual (planar fit) against thresholds.
--   \_runs: check of runs with repeating values.
--   \_lowcov: check of fluxes too close to zero (assuming issues during
-    covariance computation).
--   \_var: check of variances against thresholds.
--   \_LI7200: check of CO2 and H2O signal strength against thresholds.
--   \_interdep: flux interdependency.
--   \_man: manual quality control.
--   \_spikesLF: identification of likely outliers in low frequency data.
--   \_fetch70: check of distance corresponding to [70% signal
-    contribution](https://www.licor.com/env/support/EddyPro/topics/estimating-flux-footprint.html)
-    against fetch distance for given wind direction.\
--   \_forGF: the composite QC column used to screen fluxes for
-    gap-filling combining selected above test/filter results.
+The input format is:
+```{r results='asis', echo=FALSE, warning=FALSE}
+# sample data
+df <- data.frame(
+  Year = c(1998, 1998, 1998, 1998),
+  DoY = c(1, 1, 1, 1),
+  Hour = c(0.5, 1, 1.5, 2),
+  NEE = c(-1.21, 1.72, -9999, -9999),
+  LE = c(1.49, 3.8, 1.52, 3.94),
+  H = c(-11.77, -13.5, -18.3, -17.47),
+  Rg = c(0, 0, 0, 0),
+  Tair = c(7.4, 7.5, 7.1, 6.6),
+  Tsoil = c(4.19, 4.2, 4.22, 4.23),
+  rH = c(55.27, 55.95, 57.75, 60.2),
+  VPD = c(4.6, 4.6, 4.3, 3.9),
+  Ustar = c(0.72, 0.52, 0.22, 0.2)
+)
 
-For details see documentation of `extract_QC()`.
+# Create the table
+kable(df, 
+      # format  = "latex",
+      booktabs = TRUE,
+      caption = "Eddy covariance flux measurements at half-hourly resolution.",
+      label = "tab:flux_data",
+      digits = 2,
+      col.names = NULL,
+      align = "c") %>%
+  kable_styling(latex_options = c("striped", "hold_position"),
+                font_size = 9) |> 
+    # Second header row (below): Units
+  add_header_above(c("---" = 1, "---" = 1, "---" = 1,
+                     "umol m-2 s-1" = 1, "W m-2" = 1, "W m-2" = 1, "W m-2" = 1,
+                     "°C" = 1, "°C" = 1, "%" = 1, "hPa" = 1, "m s-1" = 1), 
+                   line = FALSE) |> 
+  # First header row (top): Variable names
+  add_header_above(c("Year " = 1, " DoY" = 1, "Hour" = 1,
+                     "NEE" = 1, "LE" = 1, "H" = 1, "Rg" = 1,
+                     "Tair" = 1, "Tsoil" = 1, "rH" = 1, "VPD" = 1, "Ustar" = 1)) |> 
+  # Add top line (before header)
+  row_spec(0, extra_latex_after = "\\toprule") |>
+  # Add bottom line (after last row of data)
+  row_spec(nrow(df), extra_latex_after = "\\bottomrule")
+```
+The format is critical. Requirements are:
 
-`REddyProc` naming strategy is available at [MPI Online Tool
-website](https://bgc.iwww.mpg.de/5624929/Output-Format).
+* Tab-delimited or space-delimited ASCII file (Excel, save as TAB delimited text)
+* The first row contains variable names, including `Year` (xxxx), `DoY` (day of the year, from 1 to 365 or 366), and `Hour` (from 0.5 to 24.0) in local time **without** daylight savings time. Flux measurement variables are `NEE` (net ecosystem exchange), `LE` (latent heat), and `H` (Sensible heat). Meteorological variables are `Rg`(shortwave incoming flobal radiation), `VPD`(vapor pressure deficit), `rH` (relative humidity), `Tair`(air temperature), `Tsoil` (soil temperature), and `Ustar` (friction velocity). 
+* The second row contains the unit, such as `umolm-2s-1` or `ms-1`, and use `-` for filler if not applicable.
+* Optional user-specified `season` column: Seasons represent similar micro-meteorological conditions, especially surface roughness under management in agriculture landscape. The season season for farmland is recommened for `u*` filtering. But for grazing pasture, it is not critical.
+* Three months of data records is minimal requirement.
+* `Hour` indicates the **end** of each half-hour period. 48 rows must required for each day, and first must be 0.5, and last must be 24.0. 
+* Low quality or invalid values should not be used, should be set to `-9999` beforehand.
+* `VPD` is used for gap-filling, and if unavailable, can be calculated from `rH` and `Tair`.
 
-## Manual QC guide
+The output format are listed as below. 
+```{r  results='asis', echo=FALSE, warning=FALSE}
 
-Theoretically, manual QC using `check_manually()` is introducing
-subjectivity to the workflow and should be avoided. However, in
-practice, certain events can occur that might be difficult to screen
-based on auxiliary data or the tests are not sensitive enough to capture
-them. It should be noted that data not falling within the expected range
-might represent interesting rare phenomena and should be carefully
-investigated before manual removal. The screening typically depends on
-the user experience with the site, considering meteo conditions and
-phenology. Examples of manually excluded half-hours could be those
-affected by precipitation, strong advection and unexpected technical
-issues. Neighbors of outlying values or isolated points can be good
-candidates for exclusion as they might have escaped the automated
-screening. Change of weather fronts can lead to unexpected energy fluxes
-that however reflect real conditions. In these conditions it could
-depend on the research question whether such cases should be excluded.
+gap_fill <- data.frame(
+  Suffix = c(
+    "_Thres", "_orig", "_f", "_fqc", "_fall", "_fall_qc",
+    "_fnum", "_fsd", "_fsdu", "_fsdug", "_fmeth", "_fwin"
+  ),
+  Description = c(
+    "Threshold of uStar values used to mark insufficient conditions",
+    "Original values used for gap filling",
+    "Original values and gaps filled with mean of selected datapoints (condition depending on gap filling method)",
+    "Quality flag: 0 = original, 1 = most reliable, 2 = medium, 3 = least reliable",
+    "All values considered as gaps (for uncertainty estimates)",
+    "All values considered as gaps (for uncertainty estimates)",
+    "Number of datapoints used for gap filling",
+    "Standard deviation of datapoints used for gap filling (uncertainty)",
+    "Standard deviation across uStar thresholds (uncertainty, bias)",
+    "Combination of random uncertainty and uncertainty due to u*: sqrt(fsd$^2$ + fsdu$^2$)",
+    "Method used for gap filling:
+    
+     1 = similar meteo condition (sFillLUT with Rg, VPD, Tair)
+     2 = similar meteo (sFillLUT with Rg only)
+     3 = mean diurnal course (sFillMDC))",
+    "Full window length used for gap filling"
+  )
+)
 
-## Abbreviations
+kable(gap_fill,
+      booktabs = TRUE,
+      escape = FALSE,
+      caption = "Description of gap filling output variables.",
+      col.names = c("Suffix", "Description"),
+      align = c("l", "l")) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    font_size = 12,
+     full_width = FALSE) |> 
+  column_spec(1, width = "2.5cm", monospace = TRUE) %>%
+  column_spec(2, width = "14cm") %>%
+  row_spec(nrow(gap_fill), extra_latex_after = "\\bottomrule")
+```
 
--   EC: Eddy Covariance
--   QC: Quality Control
--   QA: Quality Assurance
--   SA: Sonic Anemometer
--   GA: Gas Analyzer
--   Tau: Momentum flux [kg m-1 s-2]
--   H: Sensible heat flux [W m-2]
--   LE: Latent heat flux [W m-2]
--   NEE: Net ecosystem exchange [umol m-2 s-1]
--   u: Longitudinal wind speed component [m s-1]
--   w: Vertical wind speed component [m s-1]
--   ts: Sonic temperature [degC]
--   h2o: H2O concentration [mmol mol-1]
--   co2: CO2 concentration [umol mol-1]
+When bootstrapping was performed, several output columns are re-estimated with gap-Filling based on low, median, and high estimates of the uStar-Threshold.
 
-## Resources
+```{r results='asis', echo=FALSE, warning=FALSE}
+ustar_boot <- data.frame(
+  Suffix = c("_uStar", "_U05", "_U50", "_U95"),
+  Description = c(
+    "Estimate on the original unbootstrapped data",
+    "Low estimate (5\\% quantile of the bootstrapped uncertainty distribution)",
+    "Median estimate (50\\% quantile of the bootstrapped uncertainty distribution)",
+    "High estimate (95\\% quantile of the bootstrapped uncertainty distribution)"
+  )
+)
 
--   summary of `openeddy` and related resources is available as a
-    poster: <https://doi.org/10.5281/zenodo.8159040>
+kable(ustar_boot,
+      booktabs = TRUE,
+      escape = FALSE,
+      caption = "Bootstrapping the uStar-Threshold estimate",
+      col.names = c("Suffix", "Description"),
+      align = c("l", "l")) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  column_spec(1, width = "2cm", monospace = TRUE) %>%
+  column_spec(2, width = "13cm") %>%
+  row_spec(nrow(ustar_boot), extra_latex_after = "\\bottomrule") %>%
+  footnote(
+    general = "A missing `_uStar` suffix in NEE, GPP, or Reco corresponds either to not performing uStar filtering or to the uStar threshold of the non-bootstrapped data.",
+    general_title = "Note:",
+    footnote_as_chunk = TRUE,
+    escape = FALSE
+  )
+```
+```{r results='asis', echo=FALSE, warning=FALSE}
+flux_vars <- data.frame(
+  Variable = c(
+    "GPP_f",
+    "Reco_f",
+    "GPP_DT",
+    "Reco_DT",
+    "E0",
+    "R_ref",
+    "FP_alpha",
+    "FP_beta",
+    "FP_k",
+    "FP_qc",
+    "FP_dRecPar",
+    "FP_GPP2000",
+    "FP_E0",
+    "FP_RRef",
+    "FP_RRef_Night",
+    "FP_<X>_sd",
+    "FP_qc"
+  ),
+  Unit = c(
+    "$µmol~m^{-2}~s^{-1}$",
+    "$µmol~m^{-2}~s^{-1}$",
+    "$µmol~m^{-2}~s^{-1}$",
+    "$µmol~m^{-2}~s^{-1}$",
+    " ",
+    "$µmol~m^{-2}~s^{-1}$",
+    "$µmol~m^{-2}~s^{-1}$",
+    "", "", "", "","", "", 
+    "$µmol~m^{-2}~s^{-1}$",  "$µmol~m^{-2}~s^{-1}$", "", ""),
+  Description = c(
+    "Gross primary production, i.e. influx to the land surface (nighttime-based)",
+    "Ecosystem respiration, i.e. outflux from the land surface (nighttime-based)",
+    "Gross primary production by day-time partitioning",
+    "Ecosystem respiration by day-time partitioning",
+    "Activation energy parameter (K) in relationship between temperature and nighttime NEE from night-time partitioning",
+    "Respiration at reference temperature parameter in relationship between temperature and nighttime NEE from night-time partitioning",
+    "Canopy light utilization efficiency; represents the initial slope of the light-response curve (daytime partitioning)",
+    "Maximum $CO_2$ uptake rate of the canopy at light saturation (daytime partitioning)",
+    "Parameter controlling the VPD limitation of GPP (daytime partitioning)",
+    "Quality flag of the estimated parameters: 
+    
+    0 = good parameter fit; 
+    1 = some parameters out of range, required refit; 
+    2 = next parameter estimate is more than two weeks away (daytime partitioning).",
+    "Records until or after closest record that has a parameter estimate associated (daytime partitioning)",
+    "GPP at incoming radiation of 2000 $W~m^2$; more robust alternative to saturation FP_k",
+    "Activation energy parameter (K) in relationship between temperature and nighttime NEE from day-time partitioning",
+    "Respiration at reference temperature parameter in relationship between temperature and nighttime NEE from day-time partitioning",
+    "Same as FP_RRef using the same FP_E0, but from intermediate step based on night-time data",
+    "Estimated standard deviation of X",
+    "Quality flag of day-time partitioning: 
+    
+    0 = good parameter fit; 
+    1 = LRC parameters were out of range, required refit; 
+    2 = next parameter estimate is more than two weeks away."
+  ),
+  stringsAsFactors = FALSE
+)
 
--   presentation with `openeddy` introduction and comments on EC
-    workflow: <https://doi.org/10.5281/zenodo.16631376>
+kable(
+  flux_vars,
+  booktabs  = TRUE,
+  escape    = FALSE,
+  caption   = "Description of flux partitioning output variables",
+  col.names = c("Variable name", "Unit","Description"),
+  align     = c("l", "l", "l")) |>  
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    #latex_options    = c("striped", "hold_position", "scale_down"),
+    full_width       = FALSE,
+    #position         = "left",
+    font_size        = 12
+  ) |>
+  column_spec(1,  monospace = TRUE) |> #bold = TRUE,  width = "8em"
+  column_spec(3, width = "40em") |>
+  row_spec(nrow(flux_vars), extra_latex_after = "\\bottomrule" ) #bold = TRUE, background = "#4a7c59", color = "white"
+```
 
-## References
+### Manual QC guide
+To minimize bias, manual QC check via `check_manually()` should only consider precipitation events, strong advection, and unexpected technical issues, as well as these data neighboring outlying values or points. 
 
-Publication describing `openeddy` is not yet available. When describing
-the proposed quality control scheme, please refer to:
+A tip: to select a point, you may need to click 4 times.
 
-McGloin, R., Sigut, L., Havrankova, K., Dusek, J., Pavelka, M., Sedlak,
-P., 2018. Energy balance closure at a variety of ecosystems in Central
-Europe with contrasting topographies. Agric. For. Meteorol. 248,
-418-431. <https://doi.org/10.1016/j.agrformet.2017.10.003>
 
-Other references relevant to the applied quality control:
+# Gap filling
 
-Foken, T., Wichura, B., 1996. Tools for quality assessment of
-surface-based flux measurements. Agric. For. Meteorol. 78, 83--105.
-[https://doi.org/10.1016/0168-1923(95)02248-1](https://doi.org/10.1016/0168-1923(95)02248-1){.uri}
+## Biological-meteorological variables preparation
 
-Vickers, D. and Mahrt, L., 1997. Quality Control and Flux Sampling
-Problems for Tower and Aircraft Data. Journal of Atmospheric and Oceanic
-Technology, 14(3), 512-526.
-[https://doi.org/10.1175/1520-0426(1997)014\<0512:QCAFSP\>2.0.CO;2](https://doi.org/10.1175/1520-0426(1997)014%3C0512:QCAFSP%3E2.0.CO;2){.uri}
+```{r results='asis', echo = FALSE, warning=FALSE}
 
-Mauder, M., Cuntz, M., Drüe, C., Graf, A., Rebmann, C., Schmid, H.P.,
-Schmidt, M., Steinbrecher, R., 2013. A strategy for quality and
-uncertainty assessment of long-term eddy-covariance measurements. Agric.
-For. Meteorol. 169, 122-135,
-<https://doi.org/10.1016/j.agrformet.2012.09.006>
+```
 
-The methodology and benchmark of `REddyProc 1.1.3` is described in the
-following paper:
 
-Wutzler, T., Lucas-Moffat, A., Migliavacca, M., Knauer, J., Sickel, K.,
-Šigut, L., Menzer, O., and Reichstein, M. (2018): Basic and extensible
-post-processing of eddy covariance flux data with REddyProc,
-Biogeosciences, 15, 5015-5030,
-<https://doi.org/10.5194/bg-15-5015-2018>.
+# NEE partitioning 
+
+# Summary
+
+
