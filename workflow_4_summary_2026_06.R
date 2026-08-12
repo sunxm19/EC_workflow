@@ -13,7 +13,7 @@
 # This expects you are working in RStudio and this document is saved in the root
 # of already existing folder structure
 # - see structure_eddy()
-setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+# setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
 ### Install and load required packages and functions ===========================
 
@@ -333,4 +333,4 @@ save_png("temporal_sampling_coverage", paths$png, siteyear, Tstamp)
 print(spti_covp[[1]]$temporal_sampling_coverage)
 dev.off()
 
-# EOF
+# End

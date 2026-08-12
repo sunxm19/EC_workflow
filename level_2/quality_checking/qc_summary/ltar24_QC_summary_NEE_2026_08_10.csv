@@ -1,0 +1,13 @@
+"","flag_0","flag_1","flag_2","flag_NA"
+"qc_NEE_SSITC",57.4,25.2,10.3,7
+"qc_SAGA_abslim",87.4,0,7.1,5.6
+"qc_SAGA_spikesHF",93.9,0,0.5,5.6
+"qc_NEE_missfrac",94.4,0,0,5.6
+"qc_NEE_scf",92.8,0.1,0,7
+"qc_NEE_runs",93,0,0,7
+"qc_NEE_lowcov",92.9,0,0.1,7
+"qc_ALL_wresid",94.4,0,0,5.6
+"qc_NEE_interdep",74.8,25.2,0,0
+"qc_NEE_spikesLF",97.3,0,2.7,0
+"qc_ALL_fetch70",100,0,0,0
+"qc_NEE_man",99.2,0,0.8,0

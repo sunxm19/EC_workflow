@@ -44,9 +44,12 @@ source(settings_file)
 
 # Load the list of folder structure paths
 # - automated, no input required if proposed folder structure is followed
-  paths <- make_paths()  
-  # files created in the folder should follow this structure. 
+paths <- make_paths()  
 
+Tstamp <- format(Sys.time(), "%Y_%m_%d") 
+
+
+### load and format Meteorological data
 # Required input files are meteo data and processed eddy covariance data
 
 # Meteo data
@@ -67,50 +70,47 @@ source(settings_file)
 
 # Timestamp of the computation
 # - automated, will be included in file names
-Tstamp <- format(Sys.time(), "%Y%m") 
+
 
 ### Load and format Meteo data =================================================
 
 # read_eddy() reads single meteo CSV file including units (placed on the second 
 # row below header) at a standardized path. 
-meteo_file <- list.files(paths$qc_input_meteo, pattern = "\\.[Cc][Ss][Vv]$",
-                 full.names = TRUE)[1]
-meteo <- read_eddy(meteo_file, check.names = FALSE) |> 
-         distinct(TIMESTAMP_1, .keep_all = TRUE)
-head(meteo)
-summary(meteo)
+biomet_data_file <- here("biomet_data.csv")
+
+biomet_data <- read_eddy(biomet_data_file, check.names = FALSE) |> 
+  distinct(TIMESTAMP_1, .keep_all = TRUE) |> 
+  arrange(TIMESTAMP_1)
 # Rename Meteo data variables as required by openeddy and REddyProc packages
 # - other columns than those included in Met_mapping table are dropped
 # - not available columns are reported and automatically initialized with NAs
-meteo_rename <- remap_vars(meteo, 
-                           Met_mapping$workflow_varname,
-                           Met_mapping$Meteo_varname,
-                           regexp = TRUE, qc = "_qcode")
+biomet_rename <- remap_vars(biomet_data, 
+                            Met_mapping$workflow_varname,
+                            Met_mapping$Meteo_varname,
+                            regexp = TRUE, qc = "_qcode")
 
 
-summary(meteo_rename)
+summary(biomet_rename)
+head(biomet_rename)
 # strptime_eddy() rewrites the original varname of the timestamp column 
 # - retain the original varname for documentation purposes
-vars <- openeddy::varnames(meteo_rename)
+vars <- openeddy::varnames(biomet_rename)
 
 # timestamp requires conversion to POSIXct for validation
-meteo_rename$timestamp <- 
-  strptime_eddy(meteo_rename$timestamp, 
+biomet_rename$timestamp <- 
+  strptime_eddy(biomet_rename$timestamp, 
                 format = meteo_format, 
                 allow_gaps = TRUE) 
-  
 
-head(meteo_rename)
-summary(meteo_rename)
+
+head(biomet_rename)
+summary(biomet_rename)
 # reset original varnames 
-openeddy::varnames(meteo_rename) <- vars
+openeddy::varnames(biomet_rename) <- vars
 
-meteo_backup <- 
-  meteo_rename |> 
-  pad(by = "timestamp", interval = "30 min")
 # merge_eddy() assures that timestamp is complete and has defined range
-meteo_rename <- merge_eddy(list(meteo_rename), start = start, end = end)
-summary(meteo_rename)
+biomet_rename <- merge_eddy(list(biomet_rename), start = start, end = end)
+summary(biomet_rename)
 ### Load and format EddyPro full output ========================================
 
 # Load the EddyPro files (untouched originals) and bind them together
@@ -132,8 +132,7 @@ summary(meteo_rename)
 #                              start = start, end = end, skip = 1, 
 #                   fileEncoding = "UTF-8")
 
-eddypro_2024 <-  read_EddyPro(path = here("level_1", "qc_input_eddypro",
-                                          "ltar_3_2024"),
+eddypro_2024 <-  read_EddyPro(path = here("level_1", "qc_input_eddypro"),
                               #start = 2024, end = 2024, 
                               skip = 1,
                               fileEncoding = "UTF-8")
@@ -160,9 +159,10 @@ names(eddypro_2024)[names(eddypro_2024) %in% "RH"] <- "RH_EddyPro"
 # shared column names than timestamp. In case user decides to shorten timestamp
 # of one of the data frames by "start" and "end" arguments, the merge() output
 # will be also shortened.
-data <- merge(meteo_rename, eddypro_2024)
-nrow(data) # if 0 rows, M & EP shared more columns than just timestamp
+data <- left_join(biomet_rename, eddypro_2024)
 
+nrow(data) # if 0 rows, M & EP shared more columns than just timestamp
+head(data)
 # Change the timestamp formatting to default timestamp format
 # - format = "%Y-%m-%d %H:%M" is enforced to simplify further processing steps
 data$timestamp <- format(data$timestamp, format = "%Y-%m-%d %H:%M", tz = "GMT")
@@ -172,7 +172,7 @@ data <- round_df(data)
 
 # Reset units lost during merging
 # - varnames are used only for documentation below
-openeddy::units(data) <- c(openeddy::units(meteo_rename), 
+openeddy::units(data) <- c(openeddy::units(biomet_rename), 
                            openeddy::units(eddypro_2024[-1]))
 
 # Save the merged data with documentation ======================================
@@ -194,4 +194,4 @@ document_merged(data_name_out, paths$qc_input_eddypro, paths$qc_input_meteo,
                 paths$input_for_qc, Tstamp, 
                 name, mail, meteo_rename)
 
-# EOF
+# End

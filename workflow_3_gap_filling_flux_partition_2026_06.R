@@ -29,12 +29,12 @@
 ### Provide metadata and set file paths and arguments ==========================
 
 # Load the site-year settings file
-settings_file <- list.files(pattern = "settings", full.names = TRUE)
-source(settings_file)
+# settings_file <- list.files(pattern = "settings", full.names = TRUE)
+# source(settings_file)
 
 # Load the list of folder structure paths
 # - automated, no input required if proposed folder structure is followed
-paths <- make_paths()
+# paths <- make_paths()
 
 # Meteo variables that will be plotted, gap-filled and exported
 # - FP expects Meteo columns produced during GF (even if no gaps in Meteo)
@@ -47,7 +47,7 @@ input <- list.files(paths$input_for_gf, pattern = paste0(siteyear, ".*txt"),
 
 # The path where file with essential variables is located (automated)
 ess_in <- list.files(paths$input_for_gf, 
-                     pattern = paste0(siteyear, ".*essentials.*csv"),
+                      pattern = paste0(siteyear, ".*essentials.*csv"),
                      full.names = TRUE)[1]
 
 # Timestamp of the computation
@@ -59,34 +59,9 @@ ess_in <- list.files(paths$input_for_gf,
 # Load data with one header and one unit row from (tab-delimited) text file
 EddyData.F <- 
   read_eddy(input, sep = "\t") |> 
-  mutate(Tair_c = Tair - 273.15,
-         Tsoil_c = Tsoil - 273.15) |> 
-  select(- c(Tair, Tsoil)) |> 
-  rename(Tair = Tair_c,
-         Tsoil = Tsoil_c) |> 
   mutate(Rg_new = if_else(Rg > 0, Rg, 0)) |> 
   select(-Rg) |> 
   rename(Rg = Rg_new)
-# head(EddyData.F)
-# str(EddyData.F)
-
-# format the input files
-head(meteo_rename)
-
-eddy_data_add <- 
-  meteo_rename |> 
-  filter(timestamp < lubridate::ymd_hm("2024-01-02 10:00")) |> 
-  mutate(Year = lubridate::year(timestamp),
-         DoY  = lubridate::yday(timestamp),
-         my_hour = lubridate::hour(timestamp),
-         my_minute = lubridate::minute(timestamp)/60,
-         Hour      = my_hour + my_minute,
-         tair      =  Tair - 273.15, 
-         tsoil     =  Tsoil - 273.15) |> 
-  select(Year, DoY, Hour, Rg = GR, Tair = tair, Tsoil = tsoil )
-
-EddyData.F <- 
-  bind_rows(eddy_data_add, EddyData.F )
 
 # If not provided or if including gaps, calculate VPD from Tair and rH
 if (!"VPD" %in% names(EddyData.F) || anyNA(EddyData.F$VPD)) {
@@ -451,4 +426,4 @@ plot_eddy(GL10, "NEE", "qc_NEE_forGF_UF", "qc_NEE_forGF_UF",
           flux_gf = "NEE_uStar_fall", NEE_sep = TRUE)
 dev.off()
 
-# EOF
+# End

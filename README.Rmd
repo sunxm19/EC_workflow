@@ -3,7 +3,7 @@ title: "UNL LTAR-PRHPA Eddy Covariance Flux Data Workflow"
 author: "Xiangmin (Sam) Sun"
 date: "`r Sys.Date()`"
 output: 
-  bookdown::html_document2:
+  github_document:
     toc: true
     toc_depth: 3
     number_sections: true
@@ -12,7 +12,6 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(knitr)
-library(kableExtra)
 library(tidyverse)
 library(openeddy)
 library(REddyProc)
@@ -20,6 +19,8 @@ library(fs)
 
 library(sf) # for ROI
 library(leaflet)
+library(htmlwidgets)
+library(webshot2)
 
 ```
 <!--
@@ -59,7 +60,6 @@ The recommended meteorological variables include:
 
 ```{r biomet_vars, results='asis', echo = FALSE, warning=FALSE}
 options(knitr.kable.NA = '')
-knitr::opts_knit$set(bookdown.internal.label = TRUE)
 table_data <- data.frame(
   Label = c("$GR$", "$T_{air}$", "PAR", "$R_n$", "$T_{soil}$", "$VPD$", "$RH$", "$P$"),
   Name = c(
@@ -87,18 +87,11 @@ table_data <- data.frame(
 
 kable(
   table_data,
-  escape = FALSE,
-  #caption = "Table 1, meteorological variables",
-  booktabs = TRUE) %>%
-  kable_styling(full_width = FALSE, font_size = 12) |> 
-  footnote(
-    general = "Note: $GR$ and $T_{air}$ are required for minimum setup. Gaps in $GR$ are not allowed due to its use for day/night separation with despikeLF().",
-   general_title = "",
-    escape = FALSE
-  )
+  caption = "Table 1. Recommended meteorological variables for gap-filling."
+)
 ```
 
-Table \@ref(tab:biomet_vars)
+> **Note:** $GR$ and $T_{air}$ are required for minimum setup. Gaps in $GR$ are not allowed due to its use for day/night separation with `despikeLF()`.
 
 Packages and software needed to be installed:
 
@@ -295,7 +288,7 @@ polygon_coords <-
   st_coordinates()
 
 ####
-leaflet() |>
+fetch_map <- leaflet() |>
   addProviderTiles(providers$Esri.WorldImagery) |>  # satellite tiles, free
   addPolygons(
     lng = polygon_coords[, 1],
@@ -309,6 +302,17 @@ leaflet() |>
     lat = tower[2],
     popup = "Tower"
   )
+
+# github_document can't render interactive htmlwidgets, so save a static
+# screenshot instead and embed that. Requires: install.packages(c("htmlwidgets", "webshot2"))
+# webshot2 needs a local Chrome/Chromium install the first time you run this.
+map_png <- "fetch_map.png"
+if (!file.exists(map_png)) {
+  tmp_html <- tempfile(fileext = ".html")
+  htmlwidgets::saveWidget(fetch_map, tmp_html, selfcontained = TRUE)
+  webshot2::webshot(tmp_html, file = map_png, vwidth = 800, vheight = 600, delay = 1)
+}
+knitr::include_graphics(map_png)
 # EOF
 ```
 
@@ -318,9 +322,6 @@ leaflet() |>
 
 ### [EddyPro full output variable names (simplified)](https://www.licor.com/support/EddyPro/topics/output-files-full-output.html) 
 ```{r, results='asis', echo=FALSE, warning=FALSE}
-library(knitr)
-library(kableExtra)
-
 table_data <- data.frame(
   Label = c(
     "filename","date","time","file_records","used_records",
@@ -470,22 +471,14 @@ table_data <- data.frame(
 )
 
 kable(table_data,
-      caption = "Table 2. Shorthand for variables in output files from EddyPro",
-      booktabs = TRUE) %>%
-   kable_styling(full_width = FALSE) %>%
-  row_spec(seq(1, nrow(table_data), 2), background = "#F2F2F2") %>%  # shade every other row
-  footnote(
-    general = c(
-      "\n † Concentrations and fluxes for water vapor are provided as $mmol~mol^{-1}$ and $mmol~m^{-2}~s~^{-1}$, respectively.\n",
-      "‡ Units depend on the nature of the variable."
-    ),
-    threeparttable = FALSE,
-    footnote_as_chunk = TRUE
-  )
+      caption = "Table 2. Shorthand for variables in output files from EddyPro")
 ```
 
+> † Concentrations and fluxes for water vapor are provided as $mmol~mol^{-1}$ and $mmol~m^{-2}~s~^{-1}$, respectively.
+> ‡ Units depend on the nature of the variable.
+
 ### Meteorological variables
-the variables are listed in the Prerequisites in Table \@ref(tab:meteorology_table)
+The variables are listed in the Prerequisites section, in Table 1.
 
 ### Naming strategy for column names:
 #### QC prefixes specify which flux is affected:
@@ -546,28 +539,12 @@ df <- data.frame(
 
 # Create the table
 kable(df, 
-      # format  = "latex",
-      booktabs = TRUE,
-      caption = "Eddy covariance flux measurements at half-hourly resolution.",
-      label = "tab:flux_data",
+      caption = "Table 3. Eddy covariance flux measurements at half-hourly resolution.",
       digits = 2,
-      col.names = NULL,
-      align = "c") %>%
-  kable_styling(latex_options = c("striped", "hold_position"),
-                font_size = 9) |> 
-    # Second header row (below): Units
-  add_header_above(c("---" = 1, "---" = 1, "---" = 1,
-                     "umol m-2 s-1" = 1, "W m-2" = 1, "W m-2" = 1, "W m-2" = 1,
-                     "°C" = 1, "°C" = 1, "%" = 1, "hPa" = 1, "m s-1" = 1), 
-                   line = FALSE) |> 
-  # First header row (top): Variable names
-  add_header_above(c("Year " = 1, " DoY" = 1, "Hour" = 1,
-                     "NEE" = 1, "LE" = 1, "H" = 1, "Rg" = 1,
-                     "Tair" = 1, "Tsoil" = 1, "rH" = 1, "VPD" = 1, "Ustar" = 1)) |> 
-  # Add top line (before header)
-  row_spec(0, extra_latex_after = "\\toprule") |>
-  # Add bottom line (after last row of data)
-  row_spec(nrow(df), extra_latex_after = "\\bottomrule")
+      col.names = c("Year", "DoY", "Hour",
+                    "NEE (umol m-2 s-1)", "LE (W m-2)", "H (W m-2)", "Rg (W m-2)",
+                    "Tair (°C)", "Tsoil (°C)", "rH (%)", "VPD (hPa)", "Ustar (m s-1)"),
+      align = "c")
 ```
 The format is critical. Requirements are:
 
@@ -599,28 +576,15 @@ gap_fill <- data.frame(
     "Standard deviation of datapoints used for gap filling (uncertainty)",
     "Standard deviation across uStar thresholds (uncertainty, bias)",
     "Combination of random uncertainty and uncertainty due to u*: sqrt(fsd$^2$ + fsdu$^2$)",
-    "Method used for gap filling:
-    
-     1 = similar meteo condition (sFillLUT with Rg, VPD, Tair)
-     2 = similar meteo (sFillLUT with Rg only)
-     3 = mean diurnal course (sFillMDC))",
+    "Method used for gap filling: 1 = similar meteo condition (sFillLUT with Rg, VPD, Tair); 2 = similar meteo (sFillLUT with Rg only); 3 = mean diurnal course (sFillMDC)",
     "Full window length used for gap filling"
   )
 )
 
 kable(gap_fill,
-      booktabs = TRUE,
-      escape = FALSE,
-      caption = "Description of gap filling output variables.",
+      caption = "Table 4. Description of gap filling output variables.",
       col.names = c("Suffix", "Description"),
-      align = c("l", "l")) %>%
-  kable_styling(
-    bootstrap_options = c("striped", "hover"),
-    font_size = 12,
-     full_width = FALSE) |> 
-  column_spec(1, width = "2.5cm", monospace = TRUE) %>%
-  column_spec(2, width = "14cm") %>%
-  row_spec(nrow(gap_fill), extra_latex_after = "\\bottomrule")
+      align = c("l", "l"))
 ```
 
 When bootstrapping was performed, several output columns are re-estimated with gap-Filling based on low, median, and high estimates of the uStar-Threshold.
@@ -637,26 +601,13 @@ ustar_boot <- data.frame(
 )
 
 kable(ustar_boot,
-      booktabs = TRUE,
-      escape = FALSE,
-      caption = "Bootstrapping the uStar-Threshold estimate",
+      caption = "Table 5. Bootstrapping the uStar-Threshold estimate",
       col.names = c("Suffix", "Description"),
-      align = c("l", "l")) %>%
-  kable_styling(
-    bootstrap_options = c("striped", "hover"),
-    font_size = 12,
-    full_width = FALSE
-  ) %>%
-  column_spec(1, width = "2cm", monospace = TRUE) %>%
-  column_spec(2, width = "13cm") %>%
-  row_spec(nrow(ustar_boot), extra_latex_after = "\\bottomrule") %>%
-  footnote(
-    general = "A missing `_uStar` suffix in NEE, GPP, or Reco corresponds either to not performing uStar filtering or to the uStar threshold of the non-bootstrapped data.",
-    general_title = "Note:",
-    footnote_as_chunk = TRUE,
-    escape = FALSE
-  )
+      align = c("l", "l"))
 ```
+
+> **Note:** A missing `_uStar` suffix in NEE, GPP, or Reco corresponds either to not performing uStar filtering or to the uStar threshold of the non-bootstrapped data.
+
 ```{r results='asis', echo=FALSE, warning=FALSE}
 flux_vars <- data.frame(
   Variable = c(
@@ -698,49 +649,27 @@ flux_vars <- data.frame(
     "Canopy light utilization efficiency; represents the initial slope of the light-response curve (daytime partitioning)",
     "Maximum $CO_2$ uptake rate of the canopy at light saturation (daytime partitioning)",
     "Parameter controlling the VPD limitation of GPP (daytime partitioning)",
-    "Quality flag of the estimated parameters: 
-    
-    0 = good parameter fit; 
-    1 = some parameters out of range, required refit; 
-    2 = next parameter estimate is more than two weeks away (daytime partitioning).",
+    "Quality flag of the estimated parameters: 0 = good parameter fit; 1 = some parameters out of range, required refit; 2 = next parameter estimate is more than two weeks away (daytime partitioning).",
     "Records until or after closest record that has a parameter estimate associated (daytime partitioning)",
     "GPP at incoming radiation of 2000 $W~m^2$; more robust alternative to saturation FP_k",
     "Activation energy parameter (K) in relationship between temperature and nighttime NEE from day-time partitioning",
     "Respiration at reference temperature parameter in relationship between temperature and nighttime NEE from day-time partitioning",
     "Same as FP_RRef using the same FP_E0, but from intermediate step based on night-time data",
     "Estimated standard deviation of X",
-    "Quality flag of day-time partitioning: 
-    
-    0 = good parameter fit; 
-    1 = LRC parameters were out of range, required refit; 
-    2 = next parameter estimate is more than two weeks away."
+    "Quality flag of day-time partitioning: 0 = good parameter fit; 1 = LRC parameters were out of range, required refit; 2 = next parameter estimate is more than two weeks away."
   ),
   stringsAsFactors = FALSE
 )
 
 kable(
   flux_vars,
-  booktabs  = TRUE,
-  escape    = FALSE,
-  caption   = "Description of flux partitioning output variables",
+  caption   = "Table 6. Description of flux partitioning output variables",
   col.names = c("Variable name", "Unit","Description"),
-  align     = c("l", "l", "l")) |>  
-  kable_styling(
-    bootstrap_options = c("striped", "hover"),
-    #latex_options    = c("striped", "hold_position", "scale_down"),
-    full_width       = FALSE,
-    #position         = "left",
-    font_size        = 12
-  ) |>
-  column_spec(1,  monospace = TRUE) |> #bold = TRUE,  width = "8em"
-  column_spec(3, width = "40em") |>
-  row_spec(nrow(flux_vars), extra_latex_after = "\\bottomrule" ) #bold = TRUE, background = "#4a7c59", color = "white"
+  align     = c("l", "l", "l"))
 ```
 
 ### Manual QC guide
 To minimize bias, manual QC check via `check_manually()` should only consider precipitation events, strong advection, and unexpected technical issues, as well as these data neighboring outlying values or points. 
-
-A tip: to select a point, you may need to click 4 times.
 
 
 # Gap filling

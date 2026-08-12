@@ -46,11 +46,11 @@
 # - automated, no input required if proposed folder structure is followed
 # - these are meteo and EddyPro data merged in the previous >data preparation< 
 #   processing step to a single validated CSV file
-lf <- list.files(paths$input_for_qc, pattern = "\\.[Cc][Ss][Vv]$",
-                 full.names = TRUE)[1] # "\\." is literal dot
-if (length(lf) == 0) stop("no CSV in folder ", 
-                                 sQuote(paths$input_for_qc, q = FALSE ))
-data <- read_eddy(lf)
+# lf <- list.files(paths$input_for_qc, pattern = "\\.[Cc][Ss][Vv]$",
+#                 full.names = TRUE)[1] # "\\." is literal dot
+# if (length(lf) == 0) stop("no CSV in folder ", 
+#                                 sQuote(paths$input_for_qc, q = FALSE ))
+#  data <- read_eddy(lf)
 
 # Convert timestamp to POSIXct and shift the date-time information to represent 
 # the center of averaging period which is required for reliable processing
@@ -317,7 +317,7 @@ for (i in seq_along(fluxes)) {
 # - returned timestamp is removed in 'man' but kept in saved CSV file
 # - if not interactive and no manual QC found: NULL returned 
 
-# trick: two hands, left hand on 4, right hand on enter
+
 man <- check_manually(cbind(data, pre3_res), paths$quality_checking, 
                       vars = data.frame(
                         x = fluxes,
@@ -326,6 +326,7 @@ man <- check_manually(cbind(data, pre3_res), paths$quality_checking,
                       ), 
                       qc_prefix = "qc_", qc_suffix = "_prelim3", 
                       interactive_session, siteyear)[-1]
+
 summary_QC(man, names(man))
 
 # Save the results to the main data frame
@@ -486,4 +487,4 @@ write_eddy(save_data[essentials],
 names(forGF) <- names(forGF_res)
 document_QC(Tstamp, name, mail, strg_applied, forGF,
             paths$quality_checking, siteyear)
-#EOF
+#End
