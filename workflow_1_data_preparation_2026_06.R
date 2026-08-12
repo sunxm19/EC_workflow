@@ -31,10 +31,11 @@
 # setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 here()
 ### Install and load required packages and functions ===========================
-
 # Load eddy covariance workflow utility functions
 utilities_file <- here("utilities_2026_06.R")
 source(utilities_file)
+# also loading the packages used for the analysis
+# by run "0_loading_r_packages.R".
 
 ### Provide metadata and set file paths and arguments ==========================
 
